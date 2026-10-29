@@ -124,6 +124,29 @@ if (!BIN || !existsSync(BIN)) {
         assert.deepEqual(violations, [], `${name} args rejected: ${violations.join('; ')}`)
       }
 
+      // The validator cannot gate the batch union: "[A, B]" IS a string,
+      // so it passes here, reaches the binary, and comes back as
+      // `url must be http(s)`, an error that never mentions arrays. That
+      // is why the guard lives in execute(): the real pipeline must show
+      // it rejecting, with the shape named and the fix stated.
+      const fetchDef = got.find((entry) => entry.name === 'donsetch_web_fetch')?.def
+      assert.ok(fetchDef, 'web_fetch must be registered for the url-shape proof')
+      const stringified = { url: '[S88c0S5zH, SGsKUg6Lx]' }
+      assert.deepEqual(
+        validateJsonSchemaValue(fetchDef.parameters, stringified, 'args'),
+        [],
+        'the harness validator is expected to accept a stringified array; the guard owns it',
+      )
+      const guarded = await ctx.tools.execute({
+        name: 'donsetch_web_fetch',
+        arguments: stringified,
+        signal: new AbortController().signal,
+      })
+      const guardedText = (guarded?.content ?? []).map((b) => (typeof b?.text === 'string' ? b.text : '')).join(' ')
+      assert.equal(guarded?.isError, true, `a stringified array must not reach the binary: ${guardedText}`)
+      assert.match(guardedText, /url looks like a stringified array/, `unexpected rejection: ${guardedText}`)
+      assert.match(guardedText, /pass a real JSON array, or one http\(s\) URL\/handle per call/, `unexpected rejection: ${guardedText}`)
+
       const result = await ctx.tools.execute({
         name: 'donsetch_web_search',
         arguments: { query: 'what is the rust programming language' },

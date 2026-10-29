@@ -60,6 +60,37 @@ export interface DonsetchConfig {
  * hold a slot forever.
  */
 export declare function callTimeoutFor(name: string, args: unknown, baseMs: number): number;
+/** How one tool's `url` field is typed, read from its wire schema. */
+export type UrlFieldForm = 'absent' | 'single' | 'batch';
+/**
+ * Classify a registered tool's `url` field from the JSON Schema document
+ * the model sees: absent, one URL per call, or the batch union (web_fetch
+ * accepts a string OR an array of up to 12 URLs/handles). A degraded
+ * open `json` node reports 'absent' so the guard below stays silent
+ * instead of guessing about a field whose type it cannot read.
+ */
+export declare function urlFieldForm(parameters: unknown): UrlFieldForm;
+/**
+ * Reject a `url` that is a string beginning with `[`.
+ *
+ * The batch union invites a known caller mistake: a model that means
+ * `["A", "B"]` emits `"[A, B]"`, one scalar. The harness validator
+ * accepts it (it IS a string, and the union is lenient), and the binary
+ * then fails its http(s) prefix check with `url must be http(s), got:
+ * [A, B]`. That message points the wrong way: it never mentions arrays,
+ * so the caller re-sends the identical value on retry. Saying what the
+ * value looks like and what to send instead lets the model self-correct
+ * in one step.
+ *
+ * Deliberately a rejection, not a coercion. Accepting an array encoded
+ * inside a string adds a second, unwritten encoding of the batch form
+ * that every layer would have to copy, and it hides the mistake from
+ * the caller. Nothing legitimate starts with a bare `[` either: URLs
+ * begin with a scheme (an IPv6 literal begins with `http://[`) and
+ * handles begin with an alphanumeric token, so the trigger cannot
+ * misfire on a real value.
+ */
+export declare function stringifiedArrayUrlError(pub: string, form: UrlFieldForm, args: unknown): string | null;
 /** Resolve the config file the real donsetch CLI reads, per OS. */
 export declare function donsetchConfigPath(): string;
 /**

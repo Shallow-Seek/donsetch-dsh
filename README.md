@@ -95,6 +95,7 @@ The baseline DonSeTch pin auto-tracks published releases every 6 hours.
 - Plugin unload kills the daemon: hot-reload leaves no orphan processes.
 - Downloads are atomic: temp dir, hash check, rename into place, stale dirs removed.
 - The update check never blocks tool service and never runs a paid query.
+- A `url` that is a string beginning with `[` (a batch array serialized into one scalar) is rejected before the daemon with an error that names the shape and the fix, instead of the binary's `url must be http(s)`, which never mentions arrays. It is rejected, not coerced: the schema has one encoding for one URL and one for a batch, and silently accepting a third hides the mistake from the caller.
 
 ## Compatibility
 
@@ -116,6 +117,8 @@ Known upstream gap: the npm dsh CLI cannot boot `dsh web` on Linux GitHub runner
 **First install failed.** Offline? The plugin falls back to a `donsetch` on PATH (degraded, told honestly). To pin a local binary instead, set `DONSETCH_BIN=/path/to/donsetch`.
 
 **I want the old-version binary.** Delete the versioned dir under `~/.cache/donsetch/dsh/bin/` and the plugin reinstalls the pinned release.
+
+**A call says "url looks like a stringified array".** The caller meant a batch and sent `"[A, B]"`, one string. A batch is a real JSON array (`["A", "B"]`); anything else is one http(s) URL or handle per call. The guard rejects before the daemon, so nothing was fetched.
 
 ## Development
 

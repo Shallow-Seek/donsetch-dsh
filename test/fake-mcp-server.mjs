@@ -13,6 +13,7 @@
  *   FAKE_RAW_LOG     path appended with every inbound frame
  *   FAKE_ALL_LOG     path appended with every inbound method
  *   FAKE_SEARCH_ARGS_LOG  path appended with every web_search arguments object
+ *   FAKE_URL_ARGS_LOG  path appended with every web_fetch / web_crawl arguments object
  *   FAKE_CRASH_LOG   path written with any uncaught exception
  */
 import { appendFileSync, writeFileSync } from 'node:fs'
@@ -44,6 +45,26 @@ const TOOLS = [
   { name: 'slow_tool', description: 'slow', inputSchema: { type: 'object', properties: {} } },
   { name: 'crash_tool', description: 'kills the server', inputSchema: { type: 'object', properties: {} } },
   { name: 'web_search', description: 'search the web', inputSchema: { type: 'object', properties: { query: { type: 'string' }, max_results: { type: 'number' } }, required: ['query'] } },
+  {
+    name: 'web_fetch',
+    description: 'fetch one url or a batch',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: {
+          anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' }, maxItems: 12 }],
+          description: 'One http(s) URL, an S/L handle returned earlier, or an array of up to 12 URLs or handles for one batch read.',
+        },
+        max_chars: { type: 'number' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'web_crawl',
+    description: 'crawl from one seed url',
+    inputSchema: { type: 'object', properties: { url: { type: 'string', description: 'Seed http(s) URL to crawl from.' }, max_pages: { type: 'number' } }, required: ['url'] },
+  },
   { name: 'has space!!', description: 'illegal name', inputSchema: { type: 'object', properties: {} } },
 ]
 
@@ -98,6 +119,10 @@ async function handleCall(msg) {
   if (name === 'echo_tool') {
     await sleep(50)
     emit({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'echo:' + (msg.params?.arguments?.text ?? '') }] } })
+  } else if (name === 'web_fetch' || name === 'web_crawl') {
+    const args = msg.params?.arguments ?? {}
+    logLine('FAKE_URL_ARGS_LOG', JSON.stringify({ tool: name, args }))
+    emit({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: name + ' ok: ' + JSON.stringify(args.url ?? null) }] } })
   } else if (name === 'web_search') {
     const args = msg.params?.arguments ?? {}
     logLine('FAKE_SEARCH_ARGS_LOG', JSON.stringify(args))

@@ -38,7 +38,7 @@ import { join } from 'node:path'
 
 import { cacheDir, checkForUpdate, downloadBinary, installedVersions, resolveBinary, type ResolvedBinary } from './binary.js'
 import { McpClient, type McpResult } from './mcp.js'
-import { callKind, callTitle, firstLine, isValidPrefix, publicToolName, specToJsonSchema, toDshSpec } from './schemas.js'
+import { callKind, callTitle, firstLine, isValidPrefix, publicToolName, specToJsonSchema, toDshSpec, truncate } from './schemas.js'
 import { PINNED_DONSETCH_VERSION, PLUGIN_VERSION } from './version.js'
 
 export const name = 'donsetch'
@@ -109,6 +109,70 @@ export function callTimeoutFor(name: string, args: unknown, baseMs: number): num
   }
   if (budgetMs === null) return baseMs
   return Math.min(budgetMs + CALL_DEADLINE_SLACK_MS, MAX_CALL_TIMEOUT_MS)
+}
+
+/** How one tool's `url` field is typed, read from its wire schema. */
+export type UrlFieldForm = 'absent' | 'single' | 'batch'
+
+/** How much of a hostile argument value a guard message may echo back. */
+const URL_GUARD_ECHO_MAX = 100
+
+function schemaNode(node: unknown, want: 'string' | 'array', depth: number): boolean {
+  if (depth > 4 || node === null || typeof node !== 'object' || Array.isArray(node)) return false
+  const n = node as Record<string, unknown>
+  if (n.type === want) return true
+  const branches = Array.isArray(n.oneOf) ? n.oneOf : Array.isArray(n.anyOf) ? n.anyOf : null
+  if (branches === null) return false
+  return branches.some((branch) => schemaNode(branch, want, depth + 1))
+}
+
+/**
+ * Classify a registered tool's `url` field from the JSON Schema document
+ * the model sees: absent, one URL per call, or the batch union (web_fetch
+ * accepts a string OR an array of up to 12 URLs/handles). A degraded
+ * open `json` node reports 'absent' so the guard below stays silent
+ * instead of guessing about a field whose type it cannot read.
+ */
+export function urlFieldForm(parameters: unknown): UrlFieldForm {
+  const props = (parameters as Record<string, unknown> | null)?.properties as Record<string, unknown> | undefined
+  const url = props !== null && typeof props === 'object' ? props.url : undefined
+  if (url === undefined) return 'absent'
+  if (schemaNode(url, 'array', 0)) return 'batch'
+  if (schemaNode(url, 'string', 0)) return 'single'
+  return 'absent'
+}
+
+/**
+ * Reject a `url` that is a string beginning with `[`.
+ *
+ * The batch union invites a known caller mistake: a model that means
+ * `["A", "B"]` emits `"[A, B]"`, one scalar. The harness validator
+ * accepts it (it IS a string, and the union is lenient), and the binary
+ * then fails its http(s) prefix check with `url must be http(s), got:
+ * [A, B]`. That message points the wrong way: it never mentions arrays,
+ * so the caller re-sends the identical value on retry. Saying what the
+ * value looks like and what to send instead lets the model self-correct
+ * in one step.
+ *
+ * Deliberately a rejection, not a coercion. Accepting an array encoded
+ * inside a string adds a second, unwritten encoding of the batch form
+ * that every layer would have to copy, and it hides the mistake from
+ * the caller. Nothing legitimate starts with a bare `[` either: URLs
+ * begin with a scheme (an IPv6 literal begins with `http://[`) and
+ * handles begin with an alphanumeric token, so the trigger cannot
+ * misfire on a real value.
+ */
+export function stringifiedArrayUrlError(pub: string, form: UrlFieldForm, args: unknown): string | null {
+  if (form === 'absent') return null
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) return null
+  const url = (args as Record<string, unknown>).url
+  if (typeof url !== 'string') return null
+  if (!url.trimStart().startsWith('[')) return null
+  const shown = JSON.stringify(truncate(url.replace(/\s+/g, ' ').trim(), URL_GUARD_ECHO_MAX))
+  const shape = form === 'batch'
+    ? 'pass a real JSON array, or one http(s) URL/handle per call'
+    : `${pub} takes one http(s) URL or handle per call, not a list`
+  return `${pub}: url looks like a stringified array (${shown} is one string, not a list); ${shape}`
 }
 
 function resolveConfig(raw: DonsetchConfig): ResolvedConfig {
@@ -451,12 +515,18 @@ export function apply(ctx: Context, rawConfig: DonsetchConfig = {}): { dispose()
     // Handing register() the bare property map is silently accepted here
     // and rejected by the provider with 11129, killing every request.
     const parameters = specToJsonSchema(toDshSpec(inputSchema))
+    const urlForm = urlFieldForm(parameters)
     const def: ToolDefinition = {
       name: pub,
       description: description || `${rawName} via DonSeTch`,
       parameters,
       output: { schema: {}, render: (_args, value) => renderContent(value) },
       execute: async (args: unknown, exec: ToolRunContext) => {
+        // Argument shape first: a stringified batch array is the call's
+        // own defect, not a daemon problem, so name it before anything
+        // else can be blamed for the failure.
+        const badUrl = stringifiedArrayUrlError(pub, urlForm, args)
+        if (badUrl !== null) throw new Error(badUrl)
         const healthy = await ensureDaemon(exec.signal)
         if (!healthy) {
           const hint = bootError ?? 'not running'
