@@ -3,7 +3,8 @@
  * fake harness (ctx.tools registry with disposer semantics, ctx.effect
  * with real cleanup), a fake donsetch daemon, name sanitization, error
  * mapping, cancellation, crash recovery, the status-tool lifecycle,
- * and the live config-file watch restart.
+ * the stringified-array url guard, and the live config-file watch
+ * restart.
  */
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
@@ -21,17 +22,20 @@ const FAKE = join(HERE, 'fake-mcp-server.mjs')
 let artifact
 let cancelLog
 let bootLog
+let urlArgsLog
 let homeDir
 
 before(() => {
   artifact = mkdtempSync(join(tmpdir(), 'donsetch-dsh-apply-'))
   cancelLog = join(artifact, 'cancelled.log')
   bootLog = join(artifact, 'boot.log')
+  urlArgsLog = join(artifact, 'url-args.log')
   homeDir = join(artifact, 'home')
   process.env.FAKE_CANCEL_LOG = cancelLog
   process.env.FAKE_ALL_LOG = join(artifact, 'all.log')
   process.env.FAKE_RAW_LOG = join(artifact, 'raw.log')
   process.env.FAKE_BOOT_LOG = bootLog
+  process.env.FAKE_URL_ARGS_LOG = urlArgsLog
   process.env.DONSETCH_BIN = process.platform === 'win32' ? join(HERE, 'fake-mcp-server.cmd') : FAKE
   process.env.DONSETCH_DSH_HOME = homeDir
   mkdirSync(dirname(donsetchConfigPath()), { recursive: true })
@@ -47,6 +51,7 @@ after(() => {
   delete process.env.DONSETCH_BIN
   delete process.env.DONSETCH_DSH_HOME
   delete process.env.DONSETCH_DSH_AUTOUPDATE
+  delete process.env.FAKE_URL_ARGS_LOG
   rmSync(artifact, { recursive: true, force: true })
 })
 
@@ -214,6 +219,46 @@ test('apply: every registered tool carries a JSON Schema document, not the autho
   // The status tool has no parameters: still a legal empty object schema.
   const status = defs.find((d) => d.name === 'ds_status')
   assert.deepEqual(status.parameters, { type: 'object', properties: {} })
+  await harness.dispose()
+})
+
+test('apply: a stringified-array url is rejected at the boundary, before the daemon', async () => {
+  const harness = makeHarness()
+  apply(harness.ctx, { toolPrefix: 'ds', fallbackToPath: false, callTimeoutMs: 5000, bootTimeoutMs: 5000 })
+  await harness.waitFor((h) => h.defs().some((d) => d.name === 'ds_web_fetch'), 8000)
+  await harness.waitFor((h) => h.defs().some((d) => d.name === 'ds_web_crawl'), 8000)
+  const fetchTool = findDef(harness, 'ds_web_fetch')
+  const crawlTool = findDef(harness, 'ds_web_crawl')
+  const run = (def, args) => def.execute(args, { signal: new AbortController().signal })
+  const seen = () => (existsSync(urlArgsLog) ? readFileSync(urlArgsLog, 'utf8') : '')
+
+  // The value that started this: one scalar that LOOKS like a list. The
+  // error must name the shape and the fix, and the daemon must never be
+  // told about the call at all.
+  await assert.rejects(
+    () => run(fetchTool, { url: '[S88c0S5zH, SGsKUg6Lx]', max_chars: 6000 }),
+    /url looks like a stringified array[\s\S]*pass a real JSON array, or one http\(s\) URL\/handle per call/,
+  )
+  assert.ok(!seen().includes('S88c0S5zH'), `the guard must fire before the daemon; daemon saw: ${seen() || '(nothing)'}`)
+
+  // A single-url tool gets the same guard with the wording it can act on.
+  await assert.rejects(
+    () => run(crawlTool, { url: '[https://a.test, https://b.test]' }),
+    /ds_web_crawl takes one http\(s\) URL or handle per call/,
+  )
+  assert.ok(!seen().includes('https://a.test'), 'a rejected crawl must not reach the daemon either')
+
+  // Legal shapes pass through untouched: the real batch form, a plain
+  // url, an IPv6 literal (brackets AFTER the scheme), and a handle.
+  const batch = await run(fetchTool, { url: ['https://a.test', 'https://b.test'] })
+  assert.match(batch.content[0].text, /web_fetch ok: \["https:\/\/a.test","https:\/\/b.test"\]/)
+  const v6 = await run(fetchTool, { url: 'http://[::1]:8080/x' })
+  assert.match(v6.content[0].text, /http:\/\/\[::1\]:8080\/x/)
+  const handle = await run(fetchTool, { url: 'S88c0S5zH' })
+  assert.match(handle.content[0].text, /S88c0S5zH/)
+  const seed = await run(crawlTool, { url: 'https://a.test', max_pages: 2 })
+  assert.match(seed.content[0].text, /web_crawl ok: "https:\/\/a.test"/)
+  assert.ok(seen().includes('"tool":"web_fetch"'), 'legal calls must reach the daemon')
   await harness.dispose()
 })
 

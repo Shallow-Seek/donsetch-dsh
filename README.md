@@ -95,6 +95,7 @@ The baseline DonSeTch pin auto-tracks published releases every 6 hours.
 - Plugin unload kills the daemon: hot-reload leaves no orphan processes.
 - Downloads are atomic: temp dir, hash check, rename into place, stale dirs removed.
 - The update check never blocks tool service and never runs a paid query.
+- A `url` that is a string beginning with `[` (a batch array serialized into one scalar) is rejected before the daemon with an error that names the shape and the fix, instead of the binary's `url must be http(s)`, which never mentions arrays. It is rejected, not coerced: the schema has one encoding for one URL and one for a batch, and silently accepting a third hides the mistake from the caller.
 
 ## Compatibility
 
@@ -104,10 +105,11 @@ Developer preview caveat: DeepSeek Harness is iterating fast and its APIs are mo
 | --- | --- | --- |
 | DeepSeek Harness 0.1.1-rc.2 (npm latest) | `@deepseek-ai/dsh` | 0.1.x train |
 | DeepSeek Harness 0.1.2-alpha.1 (source docs) | source | 0.1.x train |
+| DeepSeek Harness 0.2.1-rc.5 (packed-plugin install and profile composition) | `@deepseek-ai/dsh` | registry tests remain on the 0.1.x train |
 
 Node `^22.19.0 || >=24.0.0` (the harness requirement).
 
-Known upstream gap: the npm dsh CLI cannot boot `dsh web` on Linux GitHub runners because the `pty.node` linux-x64 prebuild is missing from the published package (upstream discussion #1686). The plugin itself does not need pty; only the web boot smoke is affected, which CI runs on Windows instead.
+The fresh-install smoke uses dsh 0.2.1-rc.5 and pnpm 10.20.0 on Windows. Profile composition also works locally on Linux with that host; the older Linux pty-prebuild limitation does not apply to this composition check. Install pnpm on PATH before using `dsh plugin add`; dsh does not bundle it.
 
 ## Troubleshooting
 
@@ -116,6 +118,8 @@ Known upstream gap: the npm dsh CLI cannot boot `dsh web` on Linux GitHub runner
 **First install failed.** Offline? The plugin falls back to a `donsetch` on PATH (degraded, told honestly). To pin a local binary instead, set `DONSETCH_BIN=/path/to/donsetch`.
 
 **I want the old-version binary.** Delete the versioned dir under `~/.cache/donsetch/dsh/bin/` and the plugin reinstalls the pinned release.
+
+**A call says "url looks like a stringified array".** The caller meant a batch and sent `"[A, B]"`, one string. A batch is a real JSON array (`["A", "B"]`); anything else is one http(s) URL or handle per call. The guard rejects before the daemon, so nothing was fetched.
 
 ## Development
 

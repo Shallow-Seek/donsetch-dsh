@@ -68,13 +68,13 @@ const makeClient = (callTimeoutMs = 5000) =>
     env,
   })
 
-test('boot: initialize + tools/list exposes all six tools', async () => {
+test('boot: initialize + tools/list exposes all eight tools', async () => {
   const c = makeClient()
   await c.start()
   assert.equal(c.serverVersion, '9.9.9-test')
   assert.deepEqual(
     c.tools.map((t) => t.name),
-    ['echo_tool', 'fail_tool', 'slow_tool', 'crash_tool', 'web_search', 'has space!!'],
+    ['echo_tool', 'fail_tool', 'slow_tool', 'crash_tool', 'web_search', 'web_fetch', 'web_crawl', 'has space!!'],
   )
   assert.equal(c.tools[0].inputSchema.type, 'object')
   await c.dispose(300)
