@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   bump:
@@ -47,6 +48,8 @@ jobs:
           npm test
 
       - name: Commit and push
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if git diff --quiet; then
             echo "Pin already current"
@@ -58,3 +61,5 @@ jobs:
           git add src dist README.md
           git commit -m "chore: pin donsetch ${version}"
           git push origin HEAD:main
+          # GITHUB_TOKEN pushes do not trigger push workflows.
+          gh workflow run ci.yml --ref main
