@@ -37,12 +37,11 @@ jobs:
         env:
           DONSETCH_DSH_AUTOUPDATE: off
 
-  # The Ubuntu boot smoke waits on upstream discussion #1686 (the npm
-  # dsh CLI lacks the linux-x64 pty prebuild and cannot boot). Until
-  # that lands, Windows hosts the boot smoke: install the packed
-  # tarball into a fresh DSH profile and verify the composition row.
+  # A packed plugin must compose into a fresh profile in the real CLI.
+  # Keep the host and package manager explicit; dsh does not bundle pnpm.
   dsh-smoke:
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -52,10 +51,22 @@ jobs:
       - run: npm run build
       - run: npm pack
         shell: bash
+      - name: Install the smoke-test host and package manager
+        timeout-minutes: 10
+        run: npm install --global @deepseek-ai/dsh@0.2.1-rc.5 pnpm@10.20.0 --no-audit --no-fund --loglevel=info
       - name: Install into a fresh DSH profile and verify the row
+        timeout-minutes: 3
         shell: pwsh
+        env:
+          DSH_HOME: ${{ runner.temp }}/donsetch-dsh-smoke
+          CI: 'true'
         run: |
           $tgz = Get-ChildItem *.tgz | Select-Object -First 1
-          npx -y @deepseek-ai/dsh@latest plugin --profile ci add (Resolve-Path $tgz.Name)
-          npx -y @deepseek-ai/dsh@latest --profile ci --dump-config | Select-String -Pattern '@dsh-external/donsetch|donsetch'
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          dsh plugin --profile ci add (Resolve-Path $tgz.Name)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $config = dsh --profile ci --dump-config
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not ($config -match 'name: [''"]?@dsh-external/donsetch')) {
+            throw 'Packed plugin is missing from the composed profile'
+          }
+          $config | Select-String -Pattern '@dsh-external/donsetch|donsetch'
