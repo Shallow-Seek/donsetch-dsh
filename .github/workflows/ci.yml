@@ -41,18 +41,19 @@ jobs:
   # Keep the host and package manager explicit; dsh does not bundle pnpm.
   dsh-smoke:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: npm
       - run: npm install --no-audit --no-fund
       - run: npm run build
       - run: npm pack
         shell: bash
       - name: Install the smoke-test host and package manager
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: npm install --global @deepseek-ai/dsh@0.2.1-rc.5 pnpm@10.20.0 --no-audit --no-fund --loglevel=info
       - name: Install into a fresh DSH profile and verify the row
         timeout-minutes: 3
